@@ -215,6 +215,8 @@ class Genesys(Source):
         async def generate_post():
             cnt = 0
 
+            self.logger.info(f"Generating reports ...")
+
             for data_to_post in self.post_data_list:
                 if cnt < 10:
                     payload = json.dumps(data_to_post)
@@ -228,7 +230,7 @@ class Genesys(Source):
                             ) as resp:
                                 new_report = await resp.read()
                                 self.logger.info(
-                                    f"Generated report export --- \n {payload}."
+                                    f"Generated report export --- \n {data_to_post.get('filter', None)}."
                                 )
                                 semaphore.release()
                     cnt += 1
