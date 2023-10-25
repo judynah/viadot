@@ -160,3 +160,5 @@ sap_netweaver_rfc
 
 .databricks-connect
 .dotnet
+
+.vscode/settings.json
