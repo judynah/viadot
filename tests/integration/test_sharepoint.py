@@ -1,4 +1,6 @@
 import os
+import re
+from copy import deepcopy
 
 import pandas as pd
 import pytest
@@ -6,7 +8,7 @@ from prefect.tasks.secrets import PrefectSecret
 
 from viadot.config import local_config
 from viadot.exceptions import CredentialError
-from viadot.sources import Sharepoint
+from viadot.sources import Sharepoint, SharepointList
 from viadot.task_utils import df_get_data_types_task
 from viadot.tasks.sharepoint import SharepointToDF
 
@@ -18,7 +20,7 @@ def get_url() -> str:
     Returns:
         str: File URL.
     """
-    return local_config["SHAREPOINT"].get("url")
+    return local_config["SHAREPOINT"].get("file_url")
 
 
 @pytest.fixture(scope="session")
@@ -163,3 +165,282 @@ def test_get_data_types(file_name):
     dtypes = dtypes_map.values()
 
     assert "String" in dtypes
+
+
+### SECTION FOR TESTING SHAREPOINT LIST CONNECTOR ###
+@pytest.fixture(scope="session")
+def sharepoint_list():
+    """
+    Fixture for creating a SharepointList class instance.
+    The class instance can be used within a test functions to interact with Sharepoint.
+    """
+    spl = SharepointList()
+    yield spl
+
+
+def test_valid_filters(sharepoint_list):
+    filters = {
+        "filter1": {"dtype": "int", "operator1": "<", "value1": 10},
+        "filter2": {"dtype": "str", "operator1": "==", "value1": "value"},
+    }
+    result = sharepoint_list.check_filters(filters)
+    assert result is True
+
+
+def test_filters_missing_dtype(sharepoint_list):
+    filters = {
+        "filter1": {"operator1": ">", "value1": 10},
+    }
+    with pytest.raises(
+        ValueError,
+        match=re.escape("dtype for filter1 is missing!"),
+    ):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_invalid_dtype(sharepoint_list):
+    filters = {
+        "filter1": {"dtype": "list", "operator1": ">", "value1": 10},
+    }
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "dtype not allowed! Expected: ['datetime', 'date', 'bool', 'int', 'float', 'complex', 'str'] got: list ."
+        ),
+    ):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_missing_operator1(sharepoint_list):
+    filters = {
+        "filter1": {"dtype": "int", "value1": 10},
+    }
+    with pytest.raises(ValueError, match="Operator1 is missing!"):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_invalid_operator1(sharepoint_list):
+    filters = {
+        "filter1": {"dtype": "int", "operator1": "*", "value1": 10},
+    }
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Operator1 type not allowed! Expected: ['<', '>', '<=', '>=', '==', '!='] got: * ."
+        ),
+    ):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_missing_value1(sharepoint_list):
+    filters = {
+        "filter1": {"dtype": "int", "operator1": ">", "value1": None},
+    }
+    with pytest.raises(ValueError, match="Value1 for operator1 is missing!"):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_missing_operators_conjunction(sharepoint_list):
+    filters = {
+        "filter1": {
+            "dtype": "int",
+            "operator1": ">",
+            "value1": 10,
+            "operator2": "<",
+            "value2": 20,
+        },
+    }
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Operator for conjunction is missing! Expected: ['&', '|'] got empty."
+        ),
+    ):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_invalid_operators_conjunction(sharepoint_list):
+    filters = {
+        "filter1": {
+            "dtype": "int",
+            "operator1": ">",
+            "value1": 10,
+            "operator2": "<",
+            "value2": 20,
+            "operators_conjunction": "!",
+        },
+    }
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Operator for conjunction not allowed! Expected: ['&', '|'] got ! ."
+        ),
+    ):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_conjunction_not_allowed(sharepoint_list):
+    filters = {
+        "filter1": {
+            "dtype": "int",
+            "operator1": ">",
+            "value1": 10,
+            "filters_conjunction": "!",
+        },
+    }
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Filters conjunction allowed only when more then one filter provided!"
+        ),
+    ):
+        sharepoint_list.check_filters(filters)
+
+
+def test_filters_invalid_conjunction(sharepoint_list):
+    filters = {
+        "filter1": {
+            "dtype": "int",
+            "value1": 10,
+            "operator1": ">",
+            "filters_conjunction": "!",
+        },
+        "filter2": {
+            "dtype": "int",
+            "operator1": "==",
+        },
+    }
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Filter operator for conjunction not allowed! Expected: ['&', '|'] got ! ."
+        ),
+    ):
+        sharepoint_list.check_filters(filters)
+
+
+def test_valid_mapping(sharepoint_list):
+    filters = {
+        "filter1": {
+            "dtype": "int",
+            "value1": 10,
+            "value2": 20,
+            "operator1": ">",
+            "operator2": "<=",
+            "operators_conjunction": "&",
+            "filters_conjunction": "|",
+        },
+        "filter2": {
+            "dtype": "int",
+            "value1": 30,
+            "value2": 0,
+            "operator1": "==",
+            "operator2": "!=",
+            "operators_conjunction": "|",
+        },
+    }
+    expected_result = {
+        "filter1": {
+            "dtype": "int",
+            "value1": 10,
+            "value2": 20,
+            "operator1": "gt",
+            "operator2": "le",
+            "operators_conjunction": "and",
+            "filters_conjunction": "or",
+        },
+        "filter2": {
+            "dtype": "int",
+            "value1": 30,
+            "value2": 0,
+            "operator1": "eq",
+            "operator2": "ne",
+            "operators_conjunction": "or",
+        },
+    }
+    result = sharepoint_list.operators_mapping(filters)
+    assert result == expected_result
+
+
+def test_operators_mapping_invalid_comparison_operator(sharepoint_list):
+    filters = {
+        "filter1": {
+            "operator1": "*",
+            "operator2": "<=",
+            "operators_conjunction": "&",
+            "filters_conjunction": "|",
+        },
+    }
+    error_message = "This comparison operator: * is not allowed. Please read the function documentation for details!"
+    with pytest.raises(ValueError, match=re.escape(error_message)):
+        sharepoint_list.operators_mapping(filters)
+
+
+def test_operators_mapping_invalid_logical_operator(sharepoint_list):
+    filters = {
+        "filter1": {
+            "operator1": ">",
+            "operator2": "<=",
+            "operators_conjunction": "!",
+            "filters_conjunction": "|",
+        },
+    }
+    error_message = "This conjunction (logical) operator: ! is not allowed. Please read the function documentation for details!"
+    with pytest.raises(ValueError, match=re.escape(error_message)):
+        sharepoint_list.operators_mapping(filters)
+
+
+def test_operators_mapping_invalid_filters_logical_operator(sharepoint_list):
+    filters = {
+        "filter1": {
+            "operator1": ">",
+            "operator2": "<=",
+            "operators_conjunction": "&",
+            "filters_conjunction": "!",
+        },
+    }
+    error_message = "This filters conjunction (logical) operator: ! is not allowed. Please read the function documentation for details!"
+    with pytest.raises(ValueError, match=re.escape(error_message)):
+        sharepoint_list.operators_mapping(filters)
+
+
+def test_single_filter_datetime_api(sharepoint_list):
+    filters = {
+        "date_column": {"dtype": "datetime", "operator1": ">", "value1": "2023-01-01"}
+    }
+    result = sharepoint_list.make_filter_for_api(filters)
+    expected_result = "date_column gt datetime'2023-01-01T00:00:00' "
+    assert result == expected_result
+
+
+def test_multiple_filters_api(sharepoint_list):
+    filters = {
+        "int_column": {
+            "dtype": "int",
+            "operator1": ">=",
+            "value1": 10,
+            "operator2": "<",
+            "value2": 20,
+        },
+        "str_column": {"dtype": "str", "operator1": "==", "value1": "example"},
+    }
+    result = sharepoint_list.make_filter_for_api(filters)
+    expected_result = "int_column ge '10'int_column lt '20'str_column eq 'example'"
+    assert result == expected_result
+
+
+def test_single_df_filter(sharepoint_list):
+    filters = {"column1": {"operator1": ">", "value1": 10}}
+    result = sharepoint_list.make_filter_for_df(filters)
+    expected_result = "df.loc[(df.column1 > '10')]"
+    assert result == expected_result
+
+
+def test_multiple_df_filters(sharepoint_list):
+    filters = {
+        "column1": {"operator1": ">", "value1": 10, "filters_conjunction": "&"},
+        "column2": {"operator1": "<", "value1": 20},
+    }
+    result = sharepoint_list.make_filter_for_df(filters)
+    expected_result = "df.loc[(df.column1 > '10')&(df.column2 < '20')]"
+    assert result == expected_result
