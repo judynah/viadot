@@ -12,6 +12,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 
+## [0.4.25] - 2024-01-30
+### Added
+- Added logic for if_empty param: `check_if_df_empty` task to `ADLSToAzureSQL` flow.
+- Added `geopy` library to `requirements`.
+- Added new parameter `validate_df_dict` to `ADLSToAzureSQL` class.
+- Added new ViewType `agent_timeline_summary_view` to Genesys.
+
+
+## [0.4.24] - 2023-12-08
+### Fixed
+- `task_utils/get_nested_value` fixed issue with non dict parameter passed without level(1st workflow)
+
+
+## [0.4.23] - 2023-12-07
+### Added
+- Added tests for new functionalities in SAPRFC and SAPRFCV2 regarding passing credentials.
+- Added new params for mapping and reordering DataFrame for `Genesys` task and flow.
+- Added `get_task_logs` task to search for logs in the flow
+- Added `get_flow_run_id` task to find flow ID.
+- Added `search_for_msg_in_logs` task used to control flows in multiflows by searching for a given log message from a given task.
+- Added closing session to `SAPBW`.
+- Added `CSV` as a new output extension to `SharepointListToADLS` flow.
+
+### Fixed
+- Fixed creation of URL in `VidClub` source class. When the `region=None` the region parameter will not be included in the URL.
+
+### Changed
+- `if_no_data_returned` added for sharepoint list flow which can fail, warn in case of no data returend or skip (continue) execution in the old way.
+- Changed `__init__` in `SAPRFC` and `SAPRFCV2` class in source in order to raise warning in prefect when credentials will be taken from DEV.
+
+
+## [0.4.22] - 2023-11-15
+### Added
+- Added `TM1` source class.
+- Added `TM1ToDF` task class.
+- Added `set_prefect_kv` parameter to `BigQueryToADLS` with `False` as a default. If there is a need to create new pair in KV Store the parameter can be changed to `True`.
+- Added `_rename_duplicated_fields` method to `SharepointListToDF` task class for finding and rename duplicated columns.
+- Added new view type `agent_interaction_view_type` in `Genesys`source.
+- Added new logic for endpoint `users` in `Genesys`task.
+- Added libraries `nltk` and `sklearn` to `requirements`.
+
+### Fixed
+- Fixed bug for endpoint `conversations` in GET method in `Genesys` Task.
+
+### Changed
+- Splitted test for `Eurostat` on source tests and task tests.
+- Modified `SharepointList` source class: 
+  -> docstrings update.
+- Modified `SharepointToADLS` flow class:
+  -> docstrings update.
+  -> changed set_prefect_kv: bool = False to prevent forced KV store append.
+- Modified `SharepointListToADLS` flow class:
+  -> changed set_prefect_kv: bool = False to prevent forced KV store append.
+- Modified `SharepointList` source class:
+  -> docstrings update.
+  -> Changed `_unpack_fields` method to handle Sharepoint MultiChoiceField type + small improvements.
+  -> Changed `get_fields` method to handle special characters - different approach to call get() and execute_query().
+  -> Renamed method from `select_expandable_user_fields` to `select_fields` + update for MultiChoiceField type.
+  -> Changed `check_filters` method errors messages and more checks added.
+  -> Changed `operators_mapping` method errors messages.
+  -> Changed `make_filter_for_df` method errors messages.
+- Modified `SharepointListToDF` task class:
+  -> docstrings update
+- Splitted test for Eurostat on source tests and task tests.
+- Modified `CustomerGauge` source class with simplified logic to return json structure.
+- Expanded `CustomerGaugeToDF` task class with separate cleaning functions and handling nested json structure flattening with two new methods `_field_reference_unpacker` and `_nested_dict_transformer`.
+- Changed `CustomerGaugeToADLS` to containing new arguments.
+
+
+## [0.4.21] - 2023-10-26
+### Added
+- Added `validate_df` task to task_utils.
+- Added `SharepointList` source class.
+- Added `SharepointListToDF` task class.
+- Added `SharepointListToADLS` flow class.
+- Added tests for `SharepointList`.
+- Added `get_nested_dict` to utils.py.
+
+### Fixed
+
+### Changed
+- Changed `GenesysToCSV` logic for end_point == "conversations". Added new fields to extraction.
+
+
 ## [0.4.20] - 2023-10-12
 ### Added
 - Added `Office365-REST-Python-Client` library to `requirements`.

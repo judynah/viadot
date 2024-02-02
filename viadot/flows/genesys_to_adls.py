@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from prefect import Flow, task
 
-from viadot.task_utils import add_ingestion_metadata_task, adls_bulk_upload
+from viadot.task_utils import add_ingestion_metadata_task, adls_bulk_upload, validate_df
 from viadot.tasks.genesys import GenesysToCSV
 
 
@@ -89,12 +89,15 @@ class GenesysToADLS(Flow):
         report_url: str = None,
         report_columns: List[str] = None,
         conversationId_list: List[str] = None,
+        mapping_dict: Dict[str, Any] = None,
+        columns_order: List[str] = None,
         key_list: List[str] = None,
         local_file_path: str = "",
         adls_file_path: str = None,
         overwrite_adls: bool = True,
         adls_sp_credentials_secret: str = None,
         credentials_genesys: Dict[str, Any] = None,
+        validate_df_dict: Dict[str, Any] = None,
         timeout: int = 3600,
         *args: List[any],
         **kwargs: Dict[str, Any],
@@ -136,6 +139,21 @@ class GenesysToADLS(Flow):
             report_url (str, optional): The url of report generated in json response. Defaults to None.
             report_columns (List[str], optional): List of exisiting column in report. Defaults to None.
             conversationId_list (List[str], optional): List of conversationId passed as attribute of GET method. Defaults to None.
+            mapping_dict (dict, optional): Mapping dictionary from user in json format. Defaults to None.
+                Example of mapping_dict:
+                mapping_dict = {
+                    "col1": "column1",
+                    "col_3": "column3",
+                    "colum2": "column2",
+                }
+                where keys in dictionary mapping_dict are current DataFrame columns names.
+            columns_order (List, optional): Columns order list to change column order inside pd.DataFrame. Defaults to None.
+                Example of columns_order:
+                columns_order = [
+                    "column1",
+                    "column2",
+                    "column3",
+                ]
             key_list (List[str], optional): List of keys needed to specify the columns in the GET request method. Defaults to None.
             local_file_path (str, optional): The local path from which to upload the file(s). Defaults to "".
             adls_file_path (str, optional): The destination path at ADLS. Defaults to None.
@@ -143,6 +161,8 @@ class GenesysToADLS(Flow):
             adls_sp_credentials_secret (str, optional): The name of the Azure Key Vault secret containing a dictionary with
             ACCOUNT_NAME and Service Principal credentials (TENANT_ID, CLIENT_ID, CLIENT_SECRET). Defaults to None.
             credentials(dict, optional): Credentials for the genesys api. Defaults to None.
+            validate_df_dict (Dict[str,Any], optional): A dictionary with optional list of tests to verify the output dataframe. If defined, triggers
+                the `validate_df` task from task_utils. Defaults to None.
             timeout(int, optional): The amount of time (in seconds) to wait while running this task before
                 a timeout occurs. Defaults to 3600.
         """
@@ -161,10 +181,13 @@ class GenesysToADLS(Flow):
         self.report_url = report_url
         self.report_columns = report_columns
         self.conversationId_list = conversationId_list
+        self.mapping_dict = mapping_dict
+        self.columns_order = columns_order
         self.key_list = key_list
         self.start_date = start_date
         self.end_date = end_date
         self.sep = sep
+        self.validate_df_dict = validate_df_dict
         self.timeout = timeout
 
         # AzureDataLake
@@ -183,6 +206,7 @@ class GenesysToADLS(Flow):
             timeout=self.timeout,
             local_file_path=self.local_file_path,
             sep=self.sep,
+            validate_df_dict=self.validate_df_dict,
         )
 
         file_names = to_csv.bind(
@@ -194,6 +218,8 @@ class GenesysToADLS(Flow):
             end_date=self.end_date,
             environment=self.environment,
             conversationId_list=self.conversationId_list,
+            mapping_dict=self.mapping_dict,
+            columns_order=self.columns_order,
             key_list=self.key_list,
             credentials_genesys=self.credentials_genesys,
             flow=self,

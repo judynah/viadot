@@ -1,10 +1,12 @@
 import copy
 import json
 import os
+import re
 import shutil
+import pendulum
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, List, Literal, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, List, Literal, Union, cast, Tuple
 
 import pandas as pd
 import prefect
@@ -13,6 +15,7 @@ import pyarrow.dataset as ds
 from prefect import Flow, Task, task
 from prefect.backend import set_key_value
 from prefect.engine.state import Failed
+from prefect.engine.runner import ENDRUN
 from prefect.storage import Git
 from prefect.tasks.secrets import PrefectSecret
 from prefect.utilities import logging
@@ -23,8 +26,9 @@ from visions.functional import infer_type
 from visions.typesets.complete_set import CompleteSet
 
 from viadot.config import local_config
-from viadot.exceptions import CredentialError
+from viadot.exceptions import CredentialError, ValidationError
 from viadot.tasks import AzureDataLakeUpload, AzureKeyVaultSecret
+
 
 logger = logging.get_logger()
 METADATA_COLUMNS = {"_viadot_downloaded_at_utc": "DATETIME"}
@@ -668,3 +672,357 @@ def anonymize_df(
 
     df.drop(columns=["temp_date_col"], inplace=True, errors="ignore")
     return df
+
+
+@task(timeout=3600)
+def validate_df(df: pd.DataFrame, tests: dict = None) -> None:
+    """
+    Task to validate the data on DataFrame level. All numbers in the ranges are inclusive.
+    tests:
+        - `column_size`: dict{column: size}
+        - `column_unique_values`: list[columns]
+        - `column_list_to_match`: list[columns]
+        - `dataset_row_count`: dict: {'min': number, 'max', number}
+        - `column_match_regex`: dict: {column: 'regex'}
+        - `column_sum`: dict: {column: {'min': number, 'max': number}}
+
+    Args:
+        df (pd.DataFrame): The data frame for validation.
+        tests (dict, optional): Tests to apply on the data frame. Defaults to None.
+
+    Raises:
+        ValidationError: If validation failed for at least one test.
+    """
+    failed_tests = 0
+    failed_tests_list = []
+
+    if tests is not None:
+        if "column_size" in tests:
+            try:
+                for k, v in tests["column_size"].items():
+                    column_max_length = (
+                        df.astype(str).apply(lambda s: s.str.len()).max().to_dict()
+                    )
+                    try:
+                        if v == column_max_length[k]:
+                            logger.info(f"[column_size] for {k} passed.")
+                        else:
+                            logger.error(
+                                f"[column_size] test for {k} failed. field lenght is different than {v}"
+                            )
+                            failed_tests += 1
+                            failed_tests_list.append("column_size error")
+                    except Exception as e:
+                        logger.error(f"{e}")
+            except TypeError as e:
+                logger.error(
+                    "Please provide `column_size` parameter as dictionary {'columns': value}."
+                )
+
+        if "column_unique_values" in tests:
+            for column in tests["column_unique_values"]:
+                df_size = df.shape[0]
+                if df[column].nunique() == df_size:
+                    logger.info(
+                        f"[column_unique_values] Values are unique for {column} column."
+                    )
+                else:
+                    failed_tests += 1
+                    failed_tests_list.append("column_unique_values error")
+                    logger.error(
+                        f"[column_unique_values] Values for {column} are not unique."
+                    )
+
+        if "column_list_to_match" in tests:
+            if set(tests["column_list_to_match"]) == set(df.columns):
+                logger.info(f"[column_list_to_match] passed.")
+            else:
+                failed_tests += 1
+                failed_tests_list.append("column_list_to_match error")
+                logger.error(
+                    "[column_list_to_match] failed. Columns are different than expected."
+                )
+
+        if "dataset_row_count" in tests:
+            row_count = len(df.iloc[:, 0])
+            max_value = tests["dataset_row_count"]["max"] or 100_000_000
+            min_value = tests["dataset_row_count"]["min"] or 0
+
+            if (row_count > min_value) and (row_count < max_value):
+                logger.info("[dataset_row_count] passed.")
+            else:
+                failed_tests += 1
+                failed_tests_list.append("dataset_row_count error")
+                logger.error(
+                    f"[dataset_row_count] Row count ({row_count}) is not between {min_value} and {max_value}."
+                )
+
+        if "column_match_regex" in tests:
+            for k, v in tests["column_match_regex"].items():
+                try:
+                    matches = df[k].apply(lambda x: bool(re.match(v, str(x))))
+                    if all(matches):
+                        logger.info(f"[column_match_regex] on {k} column passed.")
+                    else:
+                        failed_tests += 1
+                        failed_tests_list.append("column_match_regex error")
+                        logger.error(f"[column_match_regex] on {k} column failed!")
+                except Exception as e:
+                    failed_tests += 1
+                    failed_tests_list.append("column_match_regex error")
+                    logger.error(f"[column_match_regex] Error in {k} column: {e}")
+
+        if "column_sum" in tests:
+            for column, bounds in tests["column_sum"].items():
+                col_sum = df[column].sum()
+                min_bound = bounds["min"]
+                max_bound = bounds["max"]
+                if min_bound <= col_sum <= max_bound:
+                    logger.info(
+                        f"[column_sum] Sum of {col_sum} for {column} is within the expected range."
+                    )
+                else:
+                    failed_tests += 1
+                    failed_tests_list.append("column_sum error")
+                    logger.error(
+                        f"[column_sum] Sum of {col_sum} for {column} is out of the expected range - <{min_bound}:{max_bound}>"
+                    )
+    else:
+        return "No dataframe tests to run."
+
+    if failed_tests > 0:
+        failed_tests_msg = ", ".join(failed_tests_list)
+        raise ValidationError(
+            f"Validation failed for {failed_tests} test/tests: {failed_tests_msg}"
+        )
+
+
+@task(timeout=3600, slug="check_df")
+def check_if_df_empty(
+    df, if_no_data_returned: Literal["fail", "warn", "skip"] = "fail"
+) -> bool:
+    """
+    Check if a DataFrame received as a data source response is empty.
+    If fail is expected , this task will finish with ENDRUN(Failed()) state.
+
+    Args:
+        df (pandas.DataFrame): The DataFrame to check.
+        if_no_data_returned (Literal["fail", "warn", "skip"], optional): The action to take if no data is returned in the DataFrame. Defaults to "fail".
+            Options are "fail" (default), "warn", or "skip".
+
+    Returns:
+        bool: True if the DataFrame is empty and the action is "warn", False otherwise.
+
+    Raises:
+        ENDRUN: If the DataFrame is empty and the action is "fail".
+
+    Example:
+        >>> df = pd.DataFrame()
+        >>> check_if_df_empty(df, if_no_data_returned="warn")
+        True
+    """
+    if df.empty:
+        if if_no_data_returned == "warn":
+            logger.warning("No data in the source response. Df empty.")
+            return True
+        elif if_no_data_returned == "fail":
+            raise ENDRUN(state=Failed("No data in the source response. Df empty..."))
+        elif if_no_data_returned == "skip":
+            return False
+    else:
+        return False
+
+
+@task(timeout=3600)
+def get_flow_run_id(client: prefect.Client, flow_name: str, state: str) -> str:
+    """Gets the last flow run ID based on the name of the flow and time of its run in descending order of the flow runs.
+
+    Args:
+        client (prefect.Client): The Prefect client used to execute the GraphQL query.
+        flow_name (str): The name of the flow to search for.
+        state (str): The state of the flow run to filter by.
+
+    Returns:
+        str: The ID of the last flow run that matches the given flow name and state.
+
+    Raises:
+        ValueError: If the given flow name cannot be found in the Prefect Cloud API.
+
+    Example:
+        >>> client = prefect.Client()
+        >>> flow_name = "My Flow"
+        >>> state = "SUCCESS"
+        >>> get_flow_run_id(client, flow_name, state)
+        "flow_run_id_12345"
+    """
+    # Construct the GraphQL query
+    query = f"""
+        {{
+        flow_run(
+            where: {{
+                flow: {{
+                    name: {{_eq: "{flow_name}"}}
+                }}
+                state: {{_eq: "{state}"}}
+            }}
+            order_by : {{end_time: desc}}
+            limit : 1
+        ){{
+            id
+        }}
+        }}
+        """
+    # Execute the GraphQL query
+    response = client.graphql(query)
+    result_data = response.get("data").get("flow_run")
+    if result_data:
+        flow_run_id = result_data.get("id")[0]
+        return flow_run_id
+    else:
+        raise ValueError("Given flow name cannot be found in the Prefect Cloud API")
+
+
+@task(timeout=3600)
+def get_task_logs(client: prefect.Client, flow_run_id: str, task_slug: str) -> List:
+    """
+    Retrieves the logs for a specific task in a flow run using the Prefect client and GraphQL query.
+
+    Args:
+        client (prefect.Client): The Prefect client used to execute the GraphQL query.
+        flow_run_id (str): The ID of the flow run.
+        task_slug (str): The slug of the task to retrieve logs for.
+
+    Returns:
+        List[Dict[str, Union[str, List[Dict[str, str]]]]]: A list of log entries for the specified task.
+            Each log entry is a dictionary with 'message' and 'level' keys.
+
+    Raises:
+        ValueError: If no data is available for the given task slug.
+
+    Example:
+        >>> client = prefect.Client()
+        >>> flow_run_id = "flow_run_id_12345"
+        >>> task_slug = "my_task"
+        >>> get_task_logs(client, flow_run_id, task_slug)
+        [{'message': 'Log message 1', 'level': 'INFO'}, {'message': 'Log message 2', 'level': 'DEBUG'}]
+    """
+    # Construct the GraphQL query
+    query = f"""
+        {{
+            task_run(
+                where: {{
+                    flow_run_id: {{_eq: "{flow_run_id}"}},
+                    task: {{slug: {{_eq: "{task_slug}"}}}}
+                }}
+            ) {{
+                state
+                logs {{
+                    message
+                    level
+                }}
+            }}
+        }}
+    """
+    # Execute the GraphQL query
+    logger.info("Executing GraphQL query to get task logs.")
+    response = client.graphql(query)
+    result_data = response.get("data").get("task_run")
+    # Extract task logs
+    if result_data:
+        logs = result_data[0].get("logs")
+        return logs
+    else:
+        raise ValueError("No data available for the given task slug.")
+
+
+@task(timeout=3600)
+def send_email_notification(
+    from_address: Union[str, Tuple],
+    to_address: Union[str, List[str], List[Tuple], Tuple[str]],
+    content: str,
+    subject: str,
+    vault_name: str,
+    mail_credentials_secret: str,
+    timezone: str = "Europe/Warsaw",
+) -> str:
+    """
+    Sends an email notification using SendGrid API.
+
+    Args:
+        from_address (Union[str, Tuple]): The email address of the sender.
+        to_address (Union[str, List[str], List[Tuple], Tuple[str]]): The email address(es) of the recipient(s).
+        content (str): The content of the email.
+        subject (str): The subject of the email.
+        vault_name (str): The name of the Azure Key Vault.
+        mail_credentials_secret (str): The secret name for the SendGrid API key.
+        timezone (str, optional): The timezone to use for the current datetime. Defaults to "Europe/Warsaw".
+
+    Returns:
+        str: The response from the SendGrid API.
+
+    Raises:
+        Exception: If the API key is not provided.
+
+    Example:
+        >>> send_email_notification("sender@example.com", "recipient@example.com", "Hello!", "Test Email", "my-vault", "sendgrid-api-key")
+        'Email sent successfully'
+    """
+
+    # Retrieve the SendGrid API key from the secret
+    if mail_credentials_secret is None:
+        mail_credentials_secret = PrefectSecret("SENDGRID_DEFAULT_SECRET").run()
+    elif mail_credentials_secret is not None:
+        credentials_str = AzureKeyVaultSecret(
+            mail_credentials_secret, vault_name=vault_name
+        ).run()
+        api_key = json.loads(credentials_str).get("API_KEY")
+    else:
+        raise Exception("Please provide API KEY")
+
+    # Get the current datetime in the specified timezone
+    curr_dt = pendulum.now(tz=timezone)
+
+    # Create the email message
+    message = Mail(
+        from_email=from_address,
+        to_emails=to_address,
+        subject=subject,
+        html_content=f"<strong>{content}</strong>",
+    )
+
+    # Send the email using SendGrid API
+    send_grid = SendGridAPIClient(api_key)
+    response = send_grid.send(message)
+    return response
+
+
+@task(timeout=3600)
+def search_for_msg_in_logs(logs: list, log_info: str) -> bool:
+    """
+    Searches for a specific message in Prefect flow or task logs.
+
+    Args:
+        logs (list): The logs to search in.
+        log_info (str): The message to search for.
+
+    Returns:
+        bool: True if the message is found, False otherwise.
+
+    Example:
+        >>> logs = [
+        ...     {"message": "Error occurred"},
+        ...     {"message": "Warning: Invalid input"},
+        ...     {"message": "Log message"}
+        ... ]
+        >>> search_for_msg_in_logs(logs, "Error occurred")
+        True
+    """
+    found_msg = False
+
+    # Iterate over each log entry
+    for value in logs:
+        if value.get("message") == log_info:
+            found_msg = True
+            break
+
+    return found_msg
