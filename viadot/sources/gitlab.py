@@ -38,5 +38,5 @@ class Gitlab(Source):
 
 
 
-    def get_data(self):
-        response = 
+    # def get_data(self):
+    #     response = 
