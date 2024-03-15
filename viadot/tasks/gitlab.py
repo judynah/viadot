@@ -6,8 +6,6 @@ from gitlab.exceptions import GitlabHttpError,GitlabGetError
 from prefect.utilities.tasks import defaults_from_attrs
 
 
-
-
 class UpdateWiki(Task):
     def __init__(
         self,
