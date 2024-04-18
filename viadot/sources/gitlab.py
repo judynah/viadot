@@ -14,7 +14,7 @@ class Gitlab(Source):
     def __init__(
         self,
         url: str,
-        config_key: str = "Gitlab",
+        config_key: str = "GITLAB",
         credentials: Dict[str, Any] = None,
         *args, 
         **kwargs
@@ -25,7 +25,7 @@ class Gitlab(Source):
             Args:
                 config_key (str, optional): Credential key to dictionary where credentials are stored. Defaults to "Gitlab".
                 credentials (Dict[str, Any], optional): Credentials stored in a dictionary. Defaults to None.
-                url (str, required): URL adress to repository in the  `https://gitlab.(organization).com/repo`. Defaults to None.
+                url (str, required): URL adress to private gitlab repository in the  `https://gitlab.(organization).com/repo`. Defaults to None.
                 
             Raises:
                 CredentialError: If provided credentials are missing.
@@ -37,7 +37,7 @@ class Gitlab(Source):
 
         if self.credentials is None:
             raise CredentialError("Credentials not found.")
- 
+  
         self.url = url
         if self.url is None:
             raise ValueError("URL is required.")

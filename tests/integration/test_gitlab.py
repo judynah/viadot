@@ -1,12 +1,10 @@
-
-from viadot.sources.gitlab import Gitlab
+from viadot.sources import Gitlab
 import pytest
 from viadot.config import local_config
 from viadot.exceptions import CredentialError, ValidationError
 from unittest import mock
 
 URL = "https://gitlab.com/explore/projects"
-
 
 def test_create_gitlab_instance():
     gl = Gitlab(url=URL)
@@ -27,9 +25,3 @@ def test_connection_gitlab():
         gl = Gitlab(url=URL, credentials=None)
         result = gl.get_conn()
         assert type(result) == Gitlab
-
-
-
-        
-
-

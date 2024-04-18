@@ -1,5 +1,5 @@
 import pandas as pd
-# from gitlab import Gitlab
+from viadot.sources import Gitlab
 import re
 from prefect import Task
 from gitlab.exceptions import GitlabHttpError,GitlabGetError
@@ -13,7 +13,8 @@ class UpdateWiki(Task):
         self,
         url: str,
         credentials: str = None,
-        config_key: str =  "Gitlab",
+        # config_key: str =  "Gitlab", 
+        config_key: str =  "GITLAB", 
         timeout: int = 3600,
         *args,
         **kwargs
@@ -49,7 +50,10 @@ class UpdateWiki(Task):
             self, 
             wiki_path: str,
             wiki_content: str = "",
-            file_path: str = None,
+            wiki_title: str="",
+            attachment_path: str = None,
+            add_page: bool = False,
+            add_sidebar: bool = False,
             timeout: int = 3600,
     ) -> dict:
         """Task run method.
@@ -69,25 +73,32 @@ class UpdateWiki(Task):
 
         gitlab = Gitlab(url = gitlab_url, credentials=self.credentials, config_key=self.config_key)
         gl = gitlab.get_conn()
-        # gitlab.auth()
+        gitlab.auth()
         
         project = gl.projects.get(project_namespace)
+        # page = project.wikis.get(wiki_path)
+
+        if add_page == True:
+            try:
+                page = project.wikis.get(wiki_path)
+            except (GitlabHttpError, GitlabGetError):
+                # print("Wiki Page does not exist")
+                page = project.wikis.create({'title': wiki_path, 'content': None}) # gitlab library bug - needs to add wiki_path as title
+                if add_sidebar == True: 
+                    splitted_path = wiki_path.split("/")
+                    page_sidebar = project.wikis.get("_sidebar")
+                    if f"<summary>{splitted_path[-2]}</summary>" in page_sidebar.content.lower():
+                        sidebar_content = re.sub(f"<summary>{splitted_path[-2]}</summary>", f"<summary>{splitted_path[-2]}</summary>\n[{splitted_path[-1]}]({wiki_path})\n\n", page_sidebar.content, flags=re.IGNORECASE)
+                        page_sidebar.content = sidebar_content
+                        page_sidebar.title = page_sidebar.slug
+                        page_sidebar.save()
+
         page = project.wikis.get(wiki_path)
-
-        
-        # try:
-        #     page = project.wikis.get(wiki_path)
-        # except (GitlabHttpError, GitlabGetError):
-        #     print("Wiki Page does not exist")
-            # page = project.wikis.create({'title': wiki_path, 
-            #                             'content': None})
-            
-
         page.content = wiki_content
-        if file_path is not None:
-            temp = page.upload(filename = file_path.split("/")[-1], filepath=file_path)
+        if attachment_path is not None:
+            temp = page.upload(filename = attachment_path.split("/")[-1], filepath=attachment_path)
             wiki_content = page.content + '\n\n'+ temp['link']['markdown']
-        page.content = wiki_content
+        # page.content = wiki_content
         page.title = page.slug
         page.save()
 
@@ -100,7 +111,7 @@ class GetWiki(Task):
         self,
         url: str,
         credentials: str = None,
-        config_key: str = "Gitlab",
+        config_key: str = "GITLAB",
         timeout: int = 3600,
         *args,
         **kwargs
@@ -135,7 +146,7 @@ class GetWiki(Task):
     # )
     def run(
             self, 
-            wiki_path: str,
+            wiki_path: str ="/home",
             wiki_list: bool = False,
             timeout: int = 3600,
     ) -> str:
@@ -154,7 +165,6 @@ class GetWiki(Task):
         
         self.wiki_path=wiki_path
         self.wiki_list = wiki_list
-        self.wiki_sidebar = wiki_sidebar
         
         if self.url==None:
             raise ValueError("URL are required")
@@ -175,7 +185,14 @@ class GetWiki(Task):
             return project.wikis.list()
             
 
-        page = project.wikis.get(wiki_path)
+        page = project.wikis.get(self.wiki_path)
+                      
+        # try:
+        #     project = gl.projects.get(project_namespace)
+        #     page = project.wikis.get(wiki_path)
+        #     content = page.attributes['content']
+        # except:
+        #     GitlabGetError("Wiki page no found")
 
         return page.attributes['content']
             

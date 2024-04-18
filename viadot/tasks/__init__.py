@@ -59,3 +59,4 @@ from .sftp import SftpList, SftpToDF
 from .sql_server import SQLServerCreateTable, SQLServerQuery, SQLServerToDF
 from .tm1 import TM1ToDF
 from .vid_club import VidClubToDF
+from .gitlab import UpdateWiki, GetWiki
