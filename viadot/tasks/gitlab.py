@@ -1,5 +1,5 @@
 import pandas as pd
-from viadot.sources import Gitlab
+# from viadot.sources import Gitlab
 import re
 from prefect import Task
 from gitlab.exceptions import GitlabHttpError,GitlabGetError
@@ -54,6 +54,7 @@ class UpdateWiki(Task):
             attachment_path: str = None,
             add_page: bool = False,
             add_sidebar: bool = False,
+            append_content: bool = False,
             timeout: int = 3600,
     ) -> dict:
         """Task run method.
@@ -73,7 +74,7 @@ class UpdateWiki(Task):
 
         gitlab = Gitlab(url = gitlab_url, credentials=self.credentials, config_key=self.config_key)
         gl = gitlab.get_conn()
-        gitlab.auth()
+        gl.auth()
         
         project = gl.projects.get(project_namespace)
         # page = project.wikis.get(wiki_path)
@@ -85,20 +86,31 @@ class UpdateWiki(Task):
                 # print("Wiki Page does not exist")
                 page = project.wikis.create({'title': wiki_path, 'content': None}) # gitlab library bug - needs to add wiki_path as title
                 if add_sidebar == True: 
-                    splitted_path = wiki_path.split("/")
+                    # splitted_path = wiki_path.split("/")
+                    splitted_path = wiki_path.replace("_", " ").strip("/").split('/')[1:-1]
                     page_sidebar = project.wikis.get("_sidebar")
-                    if f"<summary>{splitted_path[-2]}</summary>" in page_sidebar.content.lower():
-                        sidebar_content = re.sub(f"<summary>{splitted_path[-2]}</summary>", f"<summary>{splitted_path[-2]}</summary>\n[{splitted_path[-1]}]({wiki_path})\n\n", page_sidebar.content, flags=re.IGNORECASE)
-                        page_sidebar.content = sidebar_content
+                    pattern=""
+                    for el in splitted_path:
+                        if el!=splitted_path[-1]:
+                            pattern=pattern+f"<summary>{el}</summary>.*?"
+                        else:
+                            pattern=pattern+f"<summary>{el}</summary>"
+                    try:
+                        sidebar_content = re.search(pattern, page_sidebar.content, flags = re.DOTALL | re.IGNORECASE).group(0)
+                        new_content = sidebar_content+"\n\n["+wiki_path.split('/')[-1]+"]("+wiki_path+")"
+                        page_sidebar.content = re.sub(re.escape(sidebar_content), new_content, page_sidebar.content, flags=re.IGNORECASE)
                         page_sidebar.title = page_sidebar.slug
                         page_sidebar.save()
+                    except(TypeError, AttributeError):
+                        print("No available path. Sidebar not created")
+                        # page_sidebar.save()
 
         page = project.wikis.get(wiki_path)
-        page.content = wiki_content
+        # page.content = wiki_content
         if attachment_path is not None:
             temp = page.upload(filename = attachment_path.split("/")[-1], filepath=attachment_path)
             wiki_content = page.content + '\n\n'+ temp['link']['markdown']
-        # page.content = wiki_content
+        page.content = wiki_content
         page.title = page.slug
         page.save()
 
