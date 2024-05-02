@@ -54,7 +54,7 @@ class UpdateWiki(Task):
             attachment_path: str = None,
             add_page: bool = False,
             add_sidebar: bool = False,
-            append_content: bool = False,
+            replace_content: bool = True,
             timeout: int = 3600,
     ) -> dict:
         """Task run method.
@@ -106,11 +106,24 @@ class UpdateWiki(Task):
                         # page_sidebar.save()
 
         page = project.wikis.get(wiki_path)
-        # page.content = wiki_content
+
         if attachment_path is not None:
-            temp = page.upload(filename = attachment_path.split("/")[-1], filepath=attachment_path)
-            wiki_content = page.content + '\n\n'+ temp['link']['markdown']
-        page.content = wiki_content
+            attachement = page.upload(filename = attachment_path.split("/")[-1], filepath=attachment_path)['link']['markdown']
+
+        # page.content = wiki_content
+        # if attachment_path is not None:
+        #     attachment = 
+        #     if replace_content == False:
+                
+        #     else:
+        #         new_content = wiki_content +'\n\n'+ temp['link']['markdown']
+
+        if replace_content == False:
+            new_content = page.content + '\n\n'+ wiki_content + '\n\n' + attachement
+        else:
+            new_content = wiki_content +'\n\n'+ attachement
+
+        page.content = new_content
         page.title = page.slug
         page.save()
 
