@@ -35,6 +35,8 @@ try:
 except ImportError:
     pass
 
+from .sap_to_parquet import SAPtoParquet
+
 from .customer_gauge_to_adls import CustomerGaugeToADLS
 from .epicor_to_duckdb import EpicorOrdersToDuckDB
 from .eurostat_to_adls import EurostatToADLS
